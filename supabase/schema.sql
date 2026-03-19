@@ -21,23 +21,27 @@ create index if not exists campaigns_user_id_last_active_idx on public.campaigns
 
 alter table public.campaigns enable row level security;
 
-create policy if not exists "campaigns_select_own"
+drop policy if exists "campaigns_select_own" on public.campaigns;
+create policy "campaigns_select_own"
 on public.campaigns
 for select
 using (auth.uid() = user_id);
 
-create policy if not exists "campaigns_insert_own"
+drop policy if exists "campaigns_insert_own" on public.campaigns;
+create policy "campaigns_insert_own"
 on public.campaigns
 for insert
 with check (auth.uid() = user_id);
 
-create policy if not exists "campaigns_update_own"
+drop policy if exists "campaigns_update_own" on public.campaigns;
+create policy "campaigns_update_own"
 on public.campaigns
 for update
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
 
-create policy if not exists "campaigns_delete_own"
+drop policy if exists "campaigns_delete_own" on public.campaigns;
+create policy "campaigns_delete_own"
 on public.campaigns
 for delete
 using (auth.uid() = user_id);
