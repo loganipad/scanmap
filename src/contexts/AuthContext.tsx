@@ -1,18 +1,16 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { 
-  User, 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut as firebaseSignOut,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  sendPasswordResetEmail
-} from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { User } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
+
+export interface AppUser {
+  id: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+}
 
 interface AuthContextType {
-  user: User | null;
+  user: AppUser | null;
   isDemoMode: boolean;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -26,6 +24,15 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+function mapSupabaseUser(user: User): AppUser {
+  return {
+    id: user.id,
+    email: user.email ?? null,
+    displayName: (user.user_metadata?.full_name as string | undefined) ?? null,
+    photoURL: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+  };
+}
+
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) throw new Error('useAuth must be used within an AuthProvider');
@@ -33,49 +40,80 @@ export const useAuth = () => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setUser(data.session?.user ? mapSupabaseUser(data.session.user) : null);
       setLoading(false);
     });
-    return unsubscribe;
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ? mapSupabaseUser(session.user) : null);
+      setLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signInWithGoogle = async () => {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/dashboard`,
+      },
+    });
+    if (error) throw error;
   };
 
   const signInWithEmail = async (e: string, p: string) => {
-    await signInWithEmailAndPassword(auth, e, p);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: e,
+      password: p,
+    });
+    if (error) throw error;
   };
 
   const signUpWithEmail = async (e: string, p: string) => {
-    await createUserWithEmailAndPassword(auth, e, p);
+    const { error } = await supabase.auth.signUp({
+      email: e,
+      password: p,
+    });
+    if (error) throw error;
   };
 
   const resetPassword = async (e: string) => {
-    await sendPasswordResetEmail(auth, e);
+    const { error } = await supabase.auth.resetPasswordForEmail(e, {
+      redirectTo: `${window.location.origin}/login`,
+    });
+    if (error) throw error;
   };
 
   const signOut = async () => {
     setIsDemoMode(false);
-    await firebaseSignOut(auth);
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
   };
 
   const enableDemoMode = () => {
     setIsDemoMode(true);
     // Mock a user for demo mode
     setUser({
-      uid: 'demo-user-123',
+      id: 'demo-user-123',
       email: 'demo@flyer.app',
       displayName: 'Demo User',
       photoURL: 'https://picsum.photos/seed/demo/200/200',
-    } as User);
+    });
   };
 
   const disableDemoMode = () => {

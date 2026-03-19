@@ -1,8 +1,20 @@
-import { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { Campaign } from '../types';
+
+type CampaignRow = {
+  id: string;
+  name: string;
+  status: Campaign['status'];
+  total_pins: number;
+  total_scans: number;
+  avg_conversion: number;
+  last_active: string | null;
+  created_at: string | null;
+  user_id: string;
+  pins: Campaign['pins'] | null;
+};
 
 let demoCampaignsState: Campaign[] = [
   {
@@ -36,7 +48,20 @@ export function useCampaigns() {
   const [loading, setLoading] = useState(true);
   const { user, isDemoMode } = useAuth();
 
-  useEffect(() => {
+  const mapRowToCampaign = (row: CampaignRow): Campaign => ({
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    totalPins: row.total_pins,
+    totalScans: row.total_scans,
+    avgConversion: row.avg_conversion,
+    lastActive: row.last_active ? new Date(row.last_active) : new Date(),
+    createdAt: row.created_at ? new Date(row.created_at) : new Date(),
+    userId: row.user_id,
+    pins: row.pins ?? [],
+  });
+
+  const fetchCampaigns = useCallback(async () => {
     if (isDemoMode) {
       setCampaigns([...demoCampaignsState]);
       setLoading(false);
@@ -49,27 +74,27 @@ export function useCampaigns() {
       return;
     }
 
-    const q = query(collection(db, 'campaigns'), where('userId', '==', user.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const camps: Campaign[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        camps.push({
-          id: doc.id,
-          ...data,
-          lastActive: data.lastActive?.toDate() || new Date(),
-          createdAt: data.createdAt?.toDate() || new Date(),
-        } as Campaign);
-      });
-      setCampaigns(camps);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching campaigns:", error);
-      setLoading(false);
-    });
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('campaigns')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
 
-    return unsubscribe;
-  }, [user, isDemoMode]);
+    if (error) {
+      console.error('Error fetching campaigns:', error);
+      setLoading(false);
+      return;
+    }
+
+    const mapped = ((data ?? []) as CampaignRow[]).map(mapRowToCampaign);
+    setCampaigns(mapped);
+    setLoading(false);
+  }, [isDemoMode, user]);
+
+  useEffect(() => {
+    fetchCampaigns();
+  }, [fetchCampaigns]);
 
   const addCampaign = async (campaign: Omit<Campaign, 'id' | 'createdAt' | 'lastActive' | 'userId'>) => {
     if (isDemoMode) {
@@ -85,13 +110,21 @@ export function useCampaigns() {
       return;
     }
     if (!user) throw new Error('Must be logged in');
-    
-    await addDoc(collection(db, 'campaigns'), {
-      ...campaign,
-      userId: user.uid,
-      createdAt: serverTimestamp(),
-      lastActive: serverTimestamp(),
+
+    const { error } = await supabase.from('campaigns').insert({
+      name: campaign.name,
+      status: campaign.status,
+      total_pins: campaign.totalPins,
+      total_scans: campaign.totalScans,
+      avg_conversion: campaign.avgConversion,
+      user_id: user.id,
+      pins: campaign.pins ?? [],
+      created_at: new Date().toISOString(),
+      last_active: new Date().toISOString(),
     });
+
+    if (error) throw error;
+    await fetchCampaigns();
   };
 
   const updateCampaignStatus = async (id: string, status: Campaign['status']) => {
@@ -100,8 +133,13 @@ export function useCampaigns() {
       setCampaigns([...demoCampaignsState]);
       return;
     }
-    const ref = doc(db, 'campaigns', id);
-    await updateDoc(ref, { status, lastActive: serverTimestamp() });
+    const { error } = await supabase
+      .from('campaigns')
+      .update({ status, last_active: new Date().toISOString() })
+      .eq('id', id);
+
+    if (error) throw error;
+    await fetchCampaigns();
   };
 
   const deleteCampaign = async (id: string) => {
@@ -110,7 +148,9 @@ export function useCampaigns() {
       setCampaigns([...demoCampaignsState]);
       return;
     }
-    await deleteDoc(doc(db, 'campaigns', id));
+    const { error } = await supabase.from('campaigns').delete().eq('id', id);
+    if (error) throw error;
+    await fetchCampaigns();
   };
 
   return { campaigns, loading, addCampaign, updateCampaignStatus, deleteCampaign };
